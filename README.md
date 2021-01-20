@@ -18,9 +18,9 @@ Project for Computer Security 2021
 1. install the [Primary Requisite Software](#primary-requisites) and add to PATH variable.  
 2. `cd` into the [Fuzzer](./Fuzzer) folder  
 ```
-λ dotnet run
+λ dotnet run [TargetIP|SchemaFile]
 -- or --
-λ dotnet watch run
+λ dotnet watch run [TargetIP|SchemaFile]
 ```
 
 ## Primary Requisites:
