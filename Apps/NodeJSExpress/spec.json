@@ -1,6 +1,4 @@
 {
-	build: "node",
-	buildArgs: "\"C:/Program Files/nodejs/node_modules/npm/bin/npm-cli.js\" i",
-	run: "node",
-	runArgs: "main.js",
+	build: "npm i",
+	run: "node main.js",
 }
