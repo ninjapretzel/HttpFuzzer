@@ -1,0 +1,4 @@
+{
+	build: "npm i", // This is the command to "prepare" the program to be run. 
+	run: "node main.js", // This is the command that runs the program.
+}
