@@ -18,6 +18,10 @@ namespace Harness {
 			return callerPath.Substring(0, callerPath.LastIndexOf('/'));
 		}
 
+		public static string UncleanSourceFileDirectory([CallerFilePath] string callerPath = "[NO PATH]") {
+			return callerPath.Substring(0, callerPath.Replace('\\', '/').LastIndexOf('/'));
+		}
+
 		public static string TopSourceFileDirectory() { return SourceFileDirectory(); }
 
 		/// <summary> Convert a file or folder path to only contain forward slashes '/' instead of backslashes '\'. </summary>
@@ -89,8 +93,8 @@ namespace Harness {
 		}
 
 		private static void SetupLogger() {
-			Log.ignorePath = SourceFileDirectory();
-			Log.fromPath = "ExServer";
+			Log.ignorePath = UncleanSourceFileDirectory();
+			Log.fromPath = "Harness";
 			Log.defaultTag = "Ex";
 			LogLevel target = LogLevel.Info;
 
@@ -155,7 +159,7 @@ namespace Harness {
 
 		static async Task<Process> Run(string cmd, string folder = null) {
 			Log.Info($"{folder} $> {cmd}");
-			ProcessStartInfo info = new ProcessStartInfo(shell, $"{prefix} {cmd}") {
+			ProcessStartInfo info = new ProcessStartInfo(shell, $"{prefix} \"{cmd}\"") {
 				UseShellExecute = false,
 			};
 			if (folder != null) {
