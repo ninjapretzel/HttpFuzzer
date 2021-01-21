@@ -80,7 +80,8 @@ namespace Harness {
 			while (true) {
 				try {
 					Process finished = await Run(run, wdir);
-					Console.WriteLine($"[{run}] exited with code {finished.ExitCode}");
+					
+					Log.Warning($"Potential Crash. [{run}] exited with code {finished.ExitCode}");
 				} catch (Exception) {
 					return -1;
 				}
