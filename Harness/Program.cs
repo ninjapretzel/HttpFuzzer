@@ -1,9 +1,14 @@
-﻿using System;
+﻿using MiniHttp;
+using static MiniHttp.ProvidedMiddleware;
+using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Threading.Tasks;
+using System.Threading;
+using Ex;
 
 namespace Harness {
 	public class Program {
@@ -51,35 +56,85 @@ namespace Harness {
 				return;
 			}
 
+			SetupLogger();
+
+			HttpServer server = StartServer();
+			Log.Info("Test Harness listening on http://localhost:31337");
+
 			Task<int> waiter = AsyncMain(settings);
-			Console.WriteLine($"Final exit code: {waiter.Result}");
+			Log.Info($"Final exit code: {waiter.Result}");
+
+			Log.Stop();
+
 		}
 
 		public static async Task<int> AsyncMain(JsonObject settings) {
 			string wdir = ForwardSlashPath(Directory.GetCurrentDirectory());
 			string build = settings.Get<string>("build");
-			string buildArgs = settings.Get<string>("buildArgs");
 			string run = settings.Get<string>("run");
-			string runArgs = settings.Get<string>("runArgs");
 
 			if (build != null && build.Trim().Length > 0) {
-				Process built = await Run(build, buildArgs, wdir);
+				Process built = await Run(build, wdir);
 			}
 
 			while (true) {
 				try {
-					Process finished = await Run(run, runArgs, wdir);
-					if (finished.ExitCode == 31337) {
-						return 31337;
-					}
+					Process finished = await Run(run, wdir);
 					Console.WriteLine($"[{run}] exited with code {finished.ExitCode}");
-				} catch (Exception e) {
+				} catch (Exception) {
 					return -1;
 				}
 			}
 		}
 
+		private static void SetupLogger() {
+			Log.ignorePath = SourceFileDirectory();
+			Log.fromPath = "ExServer";
+			Log.defaultTag = "Ex";
+			LogLevel target = LogLevel.Info;
 
+			Log.logHandler += (info) => {
+				// Console.WriteLine($"{info.tag}: {info.message}");
+				if (info.level <= target) {
+					//Console.WriteLine($"\n{info.tag}: {info.message}\n");
+					Pretty.Print($"\n{info.tag}: {info.message}\n");
+				}
+			};
+
+			// Todo: Change logfile location when deployed
+			// Log ALL messages to file.
+			string logfolder = $"{SourceFileDirectory()}/logs";
+			if (!Directory.Exists(logfolder)) { Directory.CreateDirectory(logfolder); }
+			string logfile = $"{logfolder}/{DateTime.UtcNow.UnixTimestamp()}.log";
+			Log.logHandler += (info) => {
+				File.AppendAllText(logfile, $"\n{info.tag}: {info.message}\n");
+			};
+
+		}
+
+		public static string NextTest;
+		public static HttpServer StartServer() {
+			List<Middleware> middleware = new List<Middleware>();
+
+			middleware.Add(BodyParser);
+			Router router = new Router();
+			router.Post("/test", async (ctx,next) => { 
+				JsonObject obj = ctx.req.bodyObj;
+				if (obj != null && obj.Has<JsonString>("name")) {
+					Interlocked.Exchange(ref NextTest, obj.Get<string>("name"));
+					ctx.body = "{\"success\":true}";
+					Log.Info($"Beginning test \"{NextTest}\"");
+				} else {
+					ctx.body = "{\"success\":false}";
+				}
+			});
+			middleware.Add(router);
+
+
+
+			HttpServer server = new HttpServer("http://localhost:31337", middleware.ToArray());
+			return server;
+		}
 
 
 		public static string platform { get; private set; } = Init();
@@ -88,7 +143,7 @@ namespace Harness {
 		static string Init() {
 			string platform = System.Environment.OSVersion.Platform.ToString();
 			if (platform == "Win32NT") {
-				shell = "C:/Windows/System32/cmd.exe";
+				shell = @"C:\Windows\System32\cmd.exe";
 				prefix = "/C";
 			} else if (platform == "Unix") {
 				shell = "/bin/bash";
@@ -97,17 +152,10 @@ namespace Harness {
 			return platform;
 		}
 
-
-		static async Task<Process> Run(string cmd, string args = null, string folder = null) {
-			if (args == null) { args = ""; }
-			Console.WriteLine($"{folder} $ {cmd} {args}");
-			//ProcessStartInfo info = new ProcessStartInfo(shell, $"{prefix} '{cmd}'") {
-			ProcessStartInfo info = new ProcessStartInfo(cmd, args) {
+		static async Task<Process> Run(string cmd, string folder = null) {
+			Log.Info($"{folder} $> {cmd}");
+			ProcessStartInfo info = new ProcessStartInfo(shell, $"{prefix} {cmd}") {
 				UseShellExecute = false,
-				//RedirectStandardInput = true,
-				//RedirectStandardOutput  = true,
-				//RedirectStandardError = true,
-				
 			};
 			if (folder != null) {
 				info.WorkingDirectory = folder;
@@ -121,4 +169,5 @@ namespace Harness {
 		}
 
 	}
+
 }
