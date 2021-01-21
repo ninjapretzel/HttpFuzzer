@@ -6,6 +6,10 @@ function toString(req) {
 	return `Verb: ${req.method} Url: ${req.originalUrl}\nCookies: ${req.cookies}\nHeaders: ${req.headers}\nBody: ${req.body}`;
 }
 
+process.on('SIGINT', function() {
+    process.exit(31337);
+});
+
 app.all('/', function(req, res) {
 	try {
 		res.send( {success:1} );
