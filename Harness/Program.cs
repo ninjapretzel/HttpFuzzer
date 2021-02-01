@@ -11,7 +11,7 @@ using System.Threading;
 using Ex;
 
 namespace Harness {
-	public class Program {
+	public static class Program {
 
 		public static string SourceFileDirectory([CallerFilePath] string callerPath = "[NO PATH]") {
 			callerPath = ForwardSlashPath(callerPath);
@@ -31,6 +31,12 @@ namespace Harness {
 			string s = path.Replace('\\', '/');
 			return s;
 		}
+
+		public static volatile bool continueRunning = false;
+		public static volatile string NextTest = "Unnamed";
+		public static volatile Process currentProcess = null;
+		
+		public static readonly JsonObject settings = new JsonObject();
 
 
 		static void Main(string[] args) {
@@ -53,42 +59,66 @@ namespace Harness {
 			}
 
 			string json = File.ReadAllText("spec.json");
-			JsonObject settings = Json.Parse<JsonObject>(json);
-			if (settings == null) {
+			JsonObject sets = Json.Parse<JsonObject>(json);
+			if (sets == null) {
 				Console.WriteLine($"'spec.json' must contain a Json Object.");
 				Console.WriteLine($"See 'spec-example.json' in {TopSourceFileDirectory()}.");
 				return;
 			}
-
+			settings.Set(sets);
 			SetupLogger();
 
 			HttpServer server = StartServer();
 			Log.Info("Test Harness listening on http://localhost:31337");
 
-			Task<int> waiter = AsyncMain(settings);
+			
+			Task<int> waiter = AsyncMain();
 			Log.Info($"Final exit code: {waiter.Result}");
 
 			Log.Stop();
 
 		}
+		public static string buildCmd { get { return settings.Get<string>("build"); } }
+		public static string runCmd { get { return settings.Get<string>("run"); } }
+		public static string wdir { get { return ForwardSlashPath(Directory.GetCurrentDirectory()); } }
 
-		public static async Task<int> AsyncMain(JsonObject settings) {
-			string wdir = ForwardSlashPath(Directory.GetCurrentDirectory());
-			string build = settings.Get<string>("build");
-			string run = settings.Get<string>("run");
-
-			if (build != null && build.Trim().Length > 0) {
-				Process built = await Run(build, wdir);
+		public static async Task<Process> Build() {
+			if (buildCmd != null && buildCmd.Trim().Length > 0) {
+				Process built = await StartProcess(buildCmd, wdir);
+				return built;
 			}
+			return null;
+		}
+		public static async Task<Process> Run() {
+			Process process = await StartProcess(runCmd, wdir);
+			return process;
+		}
+		public static async Task<int> AsyncMain() {
+			Process built = await Build();
+			await built.WaitForExitAsync();
+			/*if (built == null || !built.HasExited) {
+				Log.Warning($"Build command [{buildCmd}] failed.");
+				return -1;
+			}*/
 
 			while (true) {
 				try {
-					Process finished = await Run(run, wdir);
+					Process process = await Run();
+					while (!process.HasExited && continueRunning) { await Task.Delay(1); }
+
+					if (process.HasExited) {
+						Log.Warning($"Potential Crash. [{runCmd}] exited with code {process.ExitCode}");
+
+					} else {
+						Log.Info($"Restart probably requested. [{runCmd}] was pre-empted by fuzzer.");
+						process.Kill(true);
+						await process.WaitForExitAsync();
+					}
 					
-					Log.Warning($"Potential Crash. [{run}] exited with code {finished.ExitCode}");
 				} catch (Exception) {
 					return -1;
 				}
+				// await Task.Delay(100);
 			}
 		}
 
@@ -117,7 +147,6 @@ namespace Harness {
 
 		}
 
-		public static string NextTest;
 		public static HttpServer StartServer() {
 			List<Middleware> middleware = new List<Middleware>();
 
@@ -132,6 +161,17 @@ namespace Harness {
 				} else {
 					ctx.body = "{\"success\":false}";
 				}
+			});
+			router.Post("/restart", async (ctx, next) => {
+				Process cur = currentProcess;
+				continueRunning = false;
+				// Wait for main to swap out to a new process...
+				while (cur == currentProcess) {
+					await Task.Delay(1);
+				}
+				// Todo: Adjust for startup time
+				await Task.Delay(1); 
+				ctx.body = "{\"success\":true}";
 			});
 			middleware.Add(router);
 
@@ -157,8 +197,9 @@ namespace Harness {
 			return platform;
 		}
 
-		static async Task<Process> Run(string cmd, string folder = null) {
+		static async Task<Process> StartProcess(string cmd, string folder = null) {
 			Log.Info($"{folder} $> {cmd}");
+			continueRunning = true;
 			ProcessStartInfo info = new ProcessStartInfo(shell, $"{prefix} \"{cmd}\"") {
 				UseShellExecute = false,
 			};
@@ -167,12 +208,29 @@ namespace Harness {
 			}
 
 			Process p = new Process() { StartInfo = info, };
+			Interlocked.Exchange(ref currentProcess, p);
 			p.Start();
-			while (!p.HasExited) { await Task.Delay(1);  }
 
 			return p;
 		}
-
+		public static void Forget(this Task task) {
+			async Task Fire(Task task) {
+				try { await task; } 
+				catch (Exception e) {
+					Log.Error("Faulted Fire-And-Forget Task:", e);
+				}
+			}
+			_ = Fire(task);
+		}
+		public static void Forget<T>(this Task<T> task) {
+			async Task Fire(Task<T> task) {
+				try { await task; } catch (Exception e) {
+					Log.Error("Faulted Fire-And-Forget Task:", e);
+					
+				}
+			}
+			_ = Fire(task);
+		}
 	}
 
 }
