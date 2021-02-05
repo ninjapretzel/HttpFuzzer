@@ -1,5 +1,6 @@
 ﻿using Ex;
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Net.Sockets;
 using System.Runtime.CompilerServices;
@@ -63,27 +64,40 @@ namespace Fuzzer {
 			public Socket sock { get; private set; }
 			public string payload { get; private set; } = "";
 			public int seed;
-			public Func<Random, char> nextChar = (rand) => (char) rand.Next(' ', '~');
+			public Func<Random, char> nextChar = (rand) => (char)rand.Next(' ', '~');
+			public Func<Random, string> nextLine = null;
 
 			private string _fullhost;
 			public string fullhost { get { return _fullhost ?? (_fullhost = $"{host}:{port}"); } }
-			public FuzzData(string host, short port, Socket sock, string payload, int? seed = null) {
+			public FuzzData(string host, short port, string payload, int? seed = null) {
 				this.host = host;
 				this.port = port;
-				this.sock = sock;
 				this.payload = payload;
 				this.seed = seed ?? unchecked (Math.Abs((int)DateTime.UtcNow.Ticks));
 			}
-
+			public FuzzData(FuzzData src) {
+				name = src.name;
+				maxLineLength = src.maxLineLength;
+				host = src.host;
+				port = src.port;
+				payload = src.payload;
+				seed = src.seed;
+				nextChar = src.nextChar;
+				nextLine = src.nextLine;
+				_fullhost = src.fullhost;
+			}
+			public void BindSocket() {
+				sock = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
+				sock.Connect(host, port);
+			}
+			public void UnbindSocket() {
+				sock.Disconnect(false);
+				sock.Dispose();
+			}
 		}
 
 		private static readonly byte[] NEWL = new byte[] { (byte)'\n' };
-		private static void FuzzBasic(FuzzData job) {
-			string fullhost = job.fullhost;
-			string payload = job.payload;
-			Random rand = new Random(job.seed);
-
-			string fullHttp = $@"POST /where HTTP/2
+		private static string FullHttp(FuzzData job) { return $@"POST /where HTTP/2
 Host: {job.fullhost}
 User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:84.0) Gecko/20100101 Firefox/84.0
 Accept: */*
@@ -99,7 +113,14 @@ Sec-GPC: 1
 TE: Trailers
 
 {job.payload}";
+		}
 
+
+		private static void FuzzBasic(FuzzData job) {
+			string fullhost = job.fullhost;
+			string payload = job.payload;
+			Random rand = new Random(job.seed);
+			string fullHttp = FullHttp(job);
 			string partialHttp = fullHttp.Substring(0, rand.Next(2, fullHttp.Length - payload.Length));
 
 			StringBuilder allSent = new StringBuilder(partialHttp);
@@ -133,8 +154,12 @@ TE: Trailers
 					read();
 					
 					int len = rand.Next(2, job.maxLineLength);
-					for (int i = 0; i < len; i++) {
-						nextLine.Append(job.nextChar(rand));
+					if (job.nextLine != null) {
+						nextLine.Append(job.nextLine(rand));
+					} else {
+						for (int i = 0; i < len; i++) {
+							nextLine.Append(job.nextChar(rand));
+						}
 					}
 					byte[] line = Encoding.UTF8.GetBytes(nextLine.ToString());
 					send(line);
@@ -145,6 +170,28 @@ TE: Trailers
 				}
 			}
 			
+		}
+
+		private static string RandomHeader(Random rand) {
+			StringBuilder str = new StringBuilder();
+
+			int nameLength = rand.Next(4, 16);
+			int valueLength = rand.Next(4, 32);
+			void addNchars(int n) {
+				for (int i = 0; i < n; i++) {
+					char c = (char)rand.Next('a', 'z');
+					if (rand.NextDouble() < .5) {
+						c = (char)(c+0x20);
+					}
+					str.Append(c);
+				}
+			}
+
+			addNchars(nameLength);
+			str.Append(": ");
+			addNchars(valueLength);
+
+			return str.ToString();
 		}
 
 		private static readonly string harnessHost = "http://localhost:31337";
@@ -158,18 +205,23 @@ TE: Trailers
 			// await Task.Delay(100);
 			// Log.Info(result);
 
-			Socket sock = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
-			sock.Connect(host, port);
-			FuzzData atk = new FuzzData(host, port, sock, "{\"ayyy\":\"lmao\"}");
-			try {
-				callback(atk);
+			List<FuzzData> atks = new List<FuzzData>();
+			FuzzData basis = new FuzzData(host, port, "{\"ayyy\":\"lmao\"}");
+			atks.Add(new FuzzData(basis));
+			atks.Add(new FuzzData(basis) { name = "RandomHeaders", nextLine = RandomHeader } );
 
-				Log.Info($"Test [{name}] finished");
-			} catch (Exception e) {
-				Log.Warning($"Unhandled Exception occurred during callback {name}:", e);
+			foreach (FuzzData atk in atks) {
+				try {
+					atk.BindSocket();
+					callback(atk);
+					atk.UnbindSocket();
+
+					Log.Info($"Test [{atk.name}] finished");
+				} catch (Exception e) {
+					Log.Warning($"Unhandled Exception occurred during test {atk.name}:", e);
+				}
 				await Request.Post($"{harnessHost}/restart", "{}");
 			}
-			
 			
 			return 0;
 		}
