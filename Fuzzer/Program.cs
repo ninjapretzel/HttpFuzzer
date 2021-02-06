@@ -6,6 +6,7 @@ using System.Net.Sockets;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Threading.Tasks;
+using System.Linq;
 
 namespace Fuzzer {
 
@@ -194,6 +195,23 @@ TE: Trailers
 			return str.ToString();
 		}
 
+		public static readonly List<List<string>> mimeTypes = LoadMimeTypes();
+		public static List<List<string>> LoadMimeTypes() {
+			try {
+				return Json.To<List<List<string>>>(File.ReadAllText("mimeTypes.json"));
+			} catch (Exception e) {
+				Log.Error("Failed to load mimeTypes", e);
+				return new List<List<string>>();
+			}
+		}
+		public class AcceptHeaderStuffer {
+			int pos = 0;
+			public string Next(Random rand) {
+				if (pos >= mimeTypes.Count) { return "*/*"; }
+				return mimeTypes[pos++][1];
+			}
+		}
+
 		private static readonly string harnessHost = "http://localhost:31337";
 		private static async Task<int> Pwn(string host, short port, Action<FuzzData> callback) {
 			string name = callback.Method.Name;
@@ -209,12 +227,15 @@ TE: Trailers
 			FuzzData basis = new FuzzData(host, port, "{\"ayyy\":\"lmao\"}");
 			atks.Add(new FuzzData(basis));
 			atks.Add(new FuzzData(basis) { name = "RandomHeaders", nextLine = RandomHeader } );
+			atks.Add(new FuzzData(basis) { name = "AcceptHeaderStuffing", nextLine = new AcceptHeaderStuffer().Next } );
 
 			foreach (FuzzData atk in atks) {
 				try {
+					Log.Info($"Test [{atk.name}] starting");
 					atk.BindSocket();
 					callback(atk);
 					atk.UnbindSocket();
+
 
 					Log.Info($"Test [{atk.name}] finished");
 				} catch (Exception e) {
