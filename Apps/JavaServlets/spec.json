@@ -1,0 +1,4 @@
+{
+    build: "javac main.java",
+    run: "java FuzzerServer",
+} 
