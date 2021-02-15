@@ -39,6 +39,10 @@ namespace Fuzzer {
 			SetupRequest();
 			SetupLogger();
 			Task<int> waiter = AsyncMain(args[0]);
+			waiter.Wait();
+
+			Console.WriteLine("All tests completed, Finished testing.");
+			Log.Stop();
 
 		}
 		
@@ -97,6 +101,44 @@ namespace Fuzzer {
 			}
 		}
 
+		private static List<ResultData> outputs = new List<ResultData>();
+
+		public class ResultData {
+			public FuzzData test { get; private set; }
+			public long bytesSent { get; private set; }
+			public DateTime start { get; private set; }
+			public DateTime end { get; private set; }
+			public TimeSpan timeSpan { get { return end-start; } }
+			public ResultData(FuzzData test, long bytesSent, DateTime start, DateTime end) {
+				this.test = test;
+				this.bytesSent = bytesSent;
+				this.start = start;
+				this.end = end;
+			}
+		}
+
+		private static readonly string[] BYTE_FIXES = new string[] {
+			"B", "KB", "MB", "GB", "TB", "PB", "EB", "ZB", "YB"
+		};
+		public static string FormatBytes(long bytes) {
+			double totalBytes = bytes;
+			for (int i = 0; i < BYTE_FIXES.Length; i++) {
+				if (totalBytes < 1024) {
+					return $"{totalBytes:F2}{BYTE_FIXES[i]}";
+				}
+				totalBytes /= 1024.0;
+			}
+			totalBytes *= 1024; // Correction for last loop through
+			return $"{totalBytes:F3}{BYTE_FIXES[BYTE_FIXES.Length-1]}";
+		}
+
+		public static string FormatTime(TimeSpan time) {
+			return time.ToString("c");
+		}
+		public static string FormatTimeFrom(DateTime start) {
+			return (DateTime.UtcNow-start).ToString("c");
+		}
+
 		private static readonly byte[] NEWL = new byte[] { (byte)'\n' };
 		private static string FullHttp(FuzzData job) { return $@"POST /where HTTP/2
 Host: {job.fullhost}
@@ -128,9 +170,15 @@ TE: Trailers
 			StringBuilder allRead = new StringBuilder();
 			byte[] garbage = Encoding.UTF8.GetBytes(partialHttp);
 			long bytesSent = 0;
+			long byteDebounce = 1024*1024;
+			DateTime start = DateTime.UtcNow;
 			void send(byte[] data) {
 				job.sock.Send(data);
 				bytesSent += data.Length;
+				if (bytesSent >= byteDebounce) {
+					byteDebounce *= 2;
+					Log.Debug($"Still sending. So far, sent {FormatBytes(bytesSent)} over {FormatTimeFrom(start)}.");
+				}
 			}
 			byte[] readBuff = new byte[4096];
 			void read() {
@@ -166,10 +214,16 @@ TE: Trailers
 					send(line);
 
 				} catch (Exception e) {
-					Log.Warning($"Exception during test after sending {bytesSent} bytes\nHTTP Message received:\n----------\n{allRead.ToString()}\n---------\n", e);
+					DateTime now = DateTime.UtcNow;
+					TimeSpan elapsed = now - start;
+
+					Log.Warning($"Exception during test after sending {FormatBytes(bytesSent)} over {FormatTime(elapsed)}\nHTTP Message received:\n----------\n{allRead.ToString()}\n---------\n", e);
 					break;
 				}
 			}
+			DateTime end = DateTime.UtcNow;
+			ResultData result = new ResultData(job, bytesSent, start, end);
+			outputs.Add(result);
 			
 		}
 
@@ -253,7 +307,7 @@ TE: Trailers
 			Log.fromPath = "Fuzzer";
 			Log.defaultTag = "Ex";
 			//Log.includeCallerInfo = false;
-			LogLevel target = LogLevel.Info;
+			LogLevel target = LogLevel.Verbose;
 
 			Log.logHandler += (info) => {
 				// Console.WriteLine($"{info.tag}: {info.message}");
