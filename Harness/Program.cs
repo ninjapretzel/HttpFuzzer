@@ -78,9 +78,6 @@ namespace Harness {
 			Log.Stop();
 
 		}
-		public static string buildCmd { get { return settings.Get<string>("build"); } }
-		public static string runCmd { get { return settings.Get<string>("run"); } }
-		public static string wdir { get { return ForwardSlashPath(Directory.GetCurrentDirectory()); } }
 
 		public static async Task<Process> Build() {
 			if (buildCmd != null && buildCmd.Trim().Length > 0) {
@@ -182,19 +179,37 @@ namespace Harness {
 		}
 
 
-		public static string platform { get; private set; } = Init();
+		public static PlatformID platformId { get; private set; }
+		public static string platform { get; private set; } = InitPlatform();
 		public static string shell { get; private set; }
 		public static string prefix { get; private set; }
-		static string Init() {
-			string platform = System.Environment.OSVersion.Platform.ToString();
-			if (platform == "Win32NT") {
+
+		public static string buildCmd {
+			get {
+				if (platformId == PlatformID.Win32NT && settings.Has("buildWindows")) { return settings.Get<string>("buildWindows"); }
+				if (platformId == PlatformID.Unix && settings.Has("buildLinux")) { return settings.Get<string>("buildLinux"); }
+				return settings.Get<string>("build");
+			}
+		}
+		public static string runCmd { 
+			get {
+				if (platformId == PlatformID.Win32NT && settings.Has("runWindows")) { return settings.Get<string>("runWindows"); }
+				if (platformId == PlatformID.Unix && settings.Has("runLinux")) { return settings.Get<string>("runLinux"); }
+				return settings.Get<string>("run"); 
+			}
+		}
+		public static string wdir { get { return ForwardSlashPath(Directory.GetCurrentDirectory()); } }
+
+		static string InitPlatform() {
+			platformId = Environment.OSVersion.Platform;
+			if (platformId == PlatformID.Win32NT) {
 				shell = @"C:\Windows\System32\cmd.exe";
 				prefix = "/C";
-			} else if (platform == "Unix") {
+			} else if (platformId == PlatformID.Unix) {
 				shell = "/bin/bash";
 				prefix = "-c";
 			}
-			return platform;
+			return platformId.ToString();
 		}
 
 		static async Task<Process> StartProcess(string cmd, string folder = null) {
