@@ -1,4 +1,5 @@
 {
-    build: "javac main.java",
-    run: "java FuzzerServer",
+	build: "mvn package",
+	run: "cd target/bin && sh webapp",
+	runWindows: "cd target/bin && webapp.bat",
 } 
