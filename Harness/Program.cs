@@ -42,8 +42,8 @@ namespace Harness {
 		static void Main(string[] args) {
 			if (args.Length < 1) { Console.WriteLine("Please provide app name to run."); return; }
 
-			string dirName = args[0];
-			string targetDir = $"../Apps/{dirName}";
+			string appName = args[0];
+			string targetDir = $"../Apps/{appName}";
 			
 			if (Directory.Exists(targetDir)) {
 				Directory.SetCurrentDirectory(targetDir);
@@ -66,7 +66,7 @@ namespace Harness {
 				return;
 			}
 			settings.Set(sets);
-			SetupLogger();
+			SetupLogger(appName);
 
 			HttpServer server = StartServer();
 			Log.Info("Test Harness listening on http://localhost:31337");
@@ -119,7 +119,7 @@ namespace Harness {
 			}
 		}
 
-		private static void SetupLogger() {
+		private static void SetupLogger(string appName) {
 			Log.ignorePath = UncleanSourceFileDirectory();
 			Log.fromPath = "Harness";
 			Log.defaultTag = "Ex";
@@ -137,7 +137,7 @@ namespace Harness {
 			// Log ALL messages to file.
 			string logfolder = $"{SourceFileDirectory()}/logs";
 			if (!Directory.Exists(logfolder)) { Directory.CreateDirectory(logfolder); }
-			string logfile = $"{logfolder}/{DateTime.UtcNow.UnixTimestamp()}.log";
+			string logfile = $"{logfolder}/{appName}-{DateTime.UtcNow.UnixTimestamp()}.log";
 			Log.logHandler += (info) => {
 				File.AppendAllText(logfile, $"\n{info.tag}: {info.message}\n");
 			};
@@ -166,8 +166,8 @@ namespace Harness {
 				while (cur == currentProcess) {
 					await Task.Delay(1);
 				}
-				// Todo: Adjust for startup time
-				await Task.Delay(1); 
+				// Todo: Adjust for startup time, maybe add a spec.json item?
+				await Task.Delay(10); 
 				ctx.body = "{\"success\":true}";
 			});
 			middleware.Add(router);
