@@ -1,4 +1,17 @@
 {
-	build: "npm i", // This is the command to "prepare" the program to be run. 
-	run: "node main.js", // This is the command that runs the program.
+	
+	// Required: this is the command to "prepare" the program to be run. 
+	build: "npm i", 
+	// Optional: override the build command, only on linux/mac.
+	//buildLinux: "sudo npm i", 
+	// Optional: override the build command, only on windows.
+	//buildWindows: "npm i", 
+	
+	// Required: this is the command that runs the program.
+	run: "node main.js", 
+	// Optional: override the run command, only on linux/mac.
+	//runLinux: "sudo node main.js", 
+	// Optional: override the run command, only on windows.
+	//runWindows: "main.js", 
+	
 }
