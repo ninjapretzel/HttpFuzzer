@@ -41,7 +41,7 @@ namespace Fuzzer {
 			Task<int> waiter = AsyncMain(args[0]);
 			waiter.Wait();
 
-			Console.WriteLine("All tests completed, Finished testing.");
+			Console.WriteLine("\n\nAll tests completed, Finished testing.");
 			Log.Stop();
 
 		}
@@ -68,9 +68,26 @@ namespace Fuzzer {
 			public short port { get; private set; } = 3000;
 			public Socket sock { get; private set; }
 			public string payload { get; private set; } = "";
+			public string newline = "\r\n";
+			public bool insertNewlines = true;
 			public int seed;
 			public Func<Random, char> nextChar = (rand) => (char)rand.Next(' ', '~');
 			public Func<Random, string> nextLine = null;
+			public Func<FuzzData, Random, string> createInitialRequest = (job, rand) => {
+				// Too easy to get outright rejected
+				// if we butcher a header before the : symbol
+				while (true) {
+					string fullHttp = PrebakedHTTP(job);
+					string med = fullHttp.Substring(0, rand.Next(2, fullHttp.Length - job.payload.Length));
+					// So make sure entire pre-baked headers remain intact
+					// by finding the last newline and submitting up to that...
+					int lastFullNewline = med.LastIndexOf("\r\n");
+					// Just before last newline- if none exists text is fully regenerated and tries again
+					return med.Substring(0, lastFullNewline);
+				}
+
+			};
+			
 
 			private string _fullhost;
 			public string fullhost { get { return _fullhost ?? (_fullhost = $"{host}:{port}"); } }
@@ -89,13 +106,16 @@ namespace Fuzzer {
 				seed = src.seed;
 				nextChar = src.nextChar;
 				nextLine = src.nextLine;
+				createInitialRequest = src.createInitialRequest;
+				insertNewlines = src.insertNewlines;
+				newline = src.newline;
 				_fullhost = src.fullhost;
 			}
 			public void BindSocket() {
 				sock = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
 				sock.Connect(host, port);
 			}
-			public void UnbindSocket() {
+			public void UnbindSocket() { 
 				sock.Disconnect(false);
 				sock.Dispose();
 			}
@@ -105,13 +125,13 @@ namespace Fuzzer {
 
 		public class ResultData {
 			public FuzzData test { get; private set; }
-			public long bytesSent { get; private set; }
+			public string sent{ get; private set; }
 			public DateTime start { get; private set; }
 			public DateTime end { get; private set; }
 			public TimeSpan timeSpan { get { return end-start; } }
-			public ResultData(FuzzData test, long bytesSent, DateTime start, DateTime end) {
+			public ResultData(FuzzData test, string sent, DateTime start, DateTime end) {
 				this.test = test;
-				this.bytesSent = bytesSent;
+				this.sent = sent;
 				this.start = start;
 				this.end = end;
 			}
@@ -140,7 +160,7 @@ namespace Fuzzer {
 		}
 
 		private static readonly byte[] NEWL = new byte[] { (byte)'\n' };
-		private static string FullHttp(FuzzData job) { return $@"POST /where HTTP/2
+		private static string PrebakedHTTP(FuzzData job) { return $@"POST / HTTP/2
 Host: {job.fullhost}
 User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:84.0) Gecko/20100101 Firefox/84.0
 Accept: */*
@@ -155,26 +175,27 @@ Cookie: veryFreshIndeed
 Sec-GPC: 1
 TE: Trailers
 
-{job.payload}";
+{job.payload}".Replace("\n", "\r\n");;
 		}
+	
 
 
 		private static void FuzzBasic(FuzzData job) {
 			string fullhost = job.fullhost;
 			string payload = job.payload;
 			Random rand = new Random(job.seed);
-			string fullHttp = FullHttp(job);
-			string partialHttp = fullHttp.Substring(0, rand.Next(2, fullHttp.Length - payload.Length));
+			string partialHttp = job.createInitialRequest(job, rand);
 
-			StringBuilder allSent = new StringBuilder(partialHttp);
+			StringBuilder allSent = new StringBuilder();
 			StringBuilder allRead = new StringBuilder();
-			byte[] garbage = Encoding.UTF8.GetBytes(partialHttp);
 			long bytesSent = 0;
 			long byteDebounce = 1024*1024;
 			DateTime start = DateTime.UtcNow;
-			void send(byte[] data) {
-				job.sock.Send(data);
-				bytesSent += data.Length;
+			void send(string data) {
+				byte[] bytes = Encoding.UTF8.GetBytes(data);
+				allSent.Append(data);
+				job.sock.Send(bytes);
+				bytesSent += bytes.Length;
 				if (bytesSent >= byteDebounce) {
 					byteDebounce *= 2;
 					Log.Debug($"Still sending. So far, sent {FormatBytes(bytesSent)} over {FormatTimeFrom(start)}.");
@@ -192,37 +213,40 @@ TE: Trailers
 				} catch (Exception e) { }
 
 			}
-			send(garbage);
+			send(partialHttp);
 			StringBuilder nextLine = new StringBuilder();
+			DateTime end;
 
 			while (true) {
 				try {
 					nextLine.Clear();
-					allSent.Append("\n");
-					send(NEWL);
-					read();
 					
-					int len = rand.Next(2, job.maxLineLength);
+					if (job.insertNewlines) {
+						send(job.newline);
+						read();
+					}
+					
 					if (job.nextLine != null) {
 						nextLine.Append(job.nextLine(rand));
 					} else {
+						int len = rand.Next(2, job.maxLineLength);
 						for (int i = 0; i < len; i++) {
 							nextLine.Append(job.nextChar(rand));
 						}
 					}
-					byte[] line = Encoding.UTF8.GetBytes(nextLine.ToString());
-					send(line);
+					
+					send(nextLine.ToString());
 
 				} catch (Exception e) {
-					DateTime now = DateTime.UtcNow;
-					TimeSpan elapsed = now - start;
+					end = DateTime.UtcNow;
+					TimeSpan elapsed = end - start;
 
 					Log.Warning($"Exception during test after sending {FormatBytes(bytesSent)} over {FormatTime(elapsed)}\nHTTP Message received:\n----------\n{allRead.ToString()}\n---------\n", e);
 					break;
 				}
 			}
-			DateTime end = DateTime.UtcNow;
-			ResultData result = new ResultData(job, bytesSent, start, end);
+			
+			ResultData result = new ResultData(job, allSent.ToString(), start, end);
 			outputs.Add(result);
 			
 		}
@@ -236,7 +260,7 @@ TE: Trailers
 				for (int i = 0; i < n; i++) {
 					char c = (char)rand.Next('a', 'z');
 					if (rand.NextDouble() < .5) {
-						c = (char)(c+0x20);
+						c = (char)(c-0x20);
 					}
 					str.Append(c);
 				}
@@ -250,7 +274,7 @@ TE: Trailers
 		}
 
 		public static readonly List<List<string>> mimeTypes = LoadMimeTypes();
-		public static List<List<string>> LoadMimeTypes() {
+		public static List<List<string>> LoadMimeTypes() {	
 			try {
 				return Json.To<List<List<string>>>(File.ReadAllText("mimeTypes.json"));
 			} catch (Exception e) {
@@ -260,13 +284,56 @@ TE: Trailers
 		}
 		public class AcceptHeaderStuffer {
 			int pos = 0;
-			public string Next(Random rand) {
+			public string NextLine(Random rand) {
+				if (pos >= mimeTypes.Count) { return "Accept: */*"; }
+				return "Accept: " + mimeTypes[pos++][1];
+			}
+		}
+		public class RandomAcceptHeaderStuffer {
+			public string NextLine(Random rand) {
+				return "Accept: " + mimeTypes[rand.Next(mimeTypes.Count)][1];
+			}
+		}
+		public class BadAcceptHeaderStuffer{
+			int pos = 0;
+			public string NextLine(Random rand) {
 				if (pos >= mimeTypes.Count) { return "*/*"; }
 				return mimeTypes[pos++][1];
 			}
 		}
+		public class HeaderContinuation {
+			bool firstLine = true;
+			public string NextLine(Random rand) {
+				if (firstLine) {
+					firstLine = false;
+					return "FixedHeader: Value";
+				}
+				char whitespace = rand.Next(10) < 5 ? ' ' : '\t';
+				return whitespace + "continuing value";
+			}
+		}
+		public class EndlessChunked {
+			public string CreateRequest(FuzzData job, Random rand) {
+				return $@"POST / HTTP/2
+Host: {job.fullhost}
+User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:84.0) Gecko/20100101 Firefox/84.0
+Accept: */*
+Transfer-Encoding: chunked".Replace("\n", "\r\n") + "\r\n";
+			}
+			
+			public string NextLine(Random rand) {
+				StringBuilder str = new StringBuilder();
+				int len = 3 + rand.Next(120);
+				str.Append($"{len}\r\n");
+				for (int i = 0; i < len; i++) {
+					str.Append((char)rand.Next(' ', '~'));
+				}
+				return str.ToString();
+			}
+		}
 
 		private static readonly string harnessHost = "http://localhost:31337";
+		
 		private static async Task<int> Pwn(string host, short port, Action<FuzzData> callback) {
 			string name = callback.Method.Name;
 			Log.Info($"Doing test [{name}] on {host}:{port}...");
@@ -281,7 +348,12 @@ TE: Trailers
 			FuzzData basis = new FuzzData(host, port, "{\"ayyy\":\"lmao\"}");
 			atks.Add(new FuzzData(basis));
 			atks.Add(new FuzzData(basis) { name = "RandomHeaders", nextLine = RandomHeader } );
-			atks.Add(new FuzzData(basis) { name = "AcceptHeaderStuffing", nextLine = new AcceptHeaderStuffer().Next } );
+			atks.Add(new FuzzData(basis) { name = "AcceptHeaderStuffer", nextLine = new AcceptHeaderStuffer().NextLine } );
+			atks.Add(new FuzzData(basis) { name = "RandomAcceptHeaderStuffer", nextLine = new RandomAcceptHeaderStuffer().NextLine } );
+			atks.Add(new FuzzData(basis) { name = "HeaderContinuation", nextLine = new HeaderContinuation().NextLine} );
+			
+			EndlessChunked ec = new EndlessChunked();
+			atks.Add(new FuzzData(basis) { name = "EndlessChunked", nextLine = ec.NextLine, createInitialRequest = ec.CreateRequest});
 
 			foreach (FuzzData atk in atks) {
 				try {
@@ -297,11 +369,17 @@ TE: Trailers
 				}
 				await Request.Post($"{harnessHost}/restart", "{}");
 			}
+
+			for (int i = 0; i < outputs.Count; i++) {
+				var res = outputs[i];
+				
+				File.WriteAllText($"{logfile}-{i}-{res.test.name}.txt", res.sent);
+			}
 			
 			return 0;
 		}
 
-
+		private static string logfile = "";
 		private static void SetupLogger() {
 			Log.ignorePath = UncleanSourceFileDirectory();
 			Log.fromPath = "Fuzzer";
@@ -321,9 +399,9 @@ TE: Trailers
 			// Log ALL messages to file.
 			string logfolder = $"{SourceFileDirectory()}/logs";
 			if (!Directory.Exists(logfolder)) { Directory.CreateDirectory(logfolder); }
-			string logfile = $"{logfolder}/{DateTime.UtcNow.UnixTimestamp()}.log";
+			logfile = $"{logfolder}/{DateTime.UtcNow.UnixTimestamp()}";
 			Log.logHandler += (info) => {
-				File.AppendAllText(logfile, $"\n{info.tag}: {info.message}\n");
+				File.AppendAllText($"{logfile}.log", $"\n{info.tag}: {info.message}\n");
 			};
 
 		}
